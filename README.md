@@ -22,7 +22,7 @@ flowchart LR
 - Normalize Persian/Arabic characters, whitespace, punctuation and HTML.
 - Remove exact duplicates; optionally use embeddings or an LLM to classify duplicates and variants.
 - Keep complete FAQ pairs, separate questions from overlapping answer chunks, or split by semantic topic shifts.
-- Accept JSON bodies and JSON/JSONL uploads, with record and upload limits.
+- Accept JSON bodies and JSON/JSONL uploads, with record limits and a `MAX_UPLOAD_MB` request-body limit enforced across `/v1` routes.
 - Evaluate single queries, batches and grouped RAG output using gold identifiers.
 - Interactive OpenAPI documentation, optional API-key authentication, and container configuration.
 

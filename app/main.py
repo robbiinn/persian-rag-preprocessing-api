@@ -28,6 +28,73 @@ app = FastAPI(
 )
 
 
+
+
+class RequestBodyTooLarge(Exception):
+    """Raised when a streamed request body exceeds the configured limit."""
+
+
+class RequestBodySizeLimitMiddleware:
+    """Apply MAX_UPLOAD_MB to every /v1 request before body parsing."""
+
+    def __init__(self, app, max_bytes: int, max_mb: int):
+        self.app = app
+        self.max_bytes = max_bytes
+        self.max_mb = max_mb
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not scope.get("path", "").startswith("/v1"):
+            await self.app(scope, receive, send)
+            return
+
+        content_length = next(
+            (value for key, value in scope.get("headers", []) if key.lower() == b"content-length"),
+            None,
+        )
+        if content_length is not None:
+            try:
+                declared_length = int(content_length)
+            except ValueError:
+                response = JSONResponse({"detail": "Invalid Content-Length header."}, status_code=400)
+                await response(scope, receive, send)
+                return
+            if declared_length < 0:
+                response = JSONResponse({"detail": "Invalid Content-Length header."}, status_code=400)
+                await response(scope, receive, send)
+                return
+            if declared_length > self.max_bytes:
+                response = JSONResponse(
+                    {"detail": f"Request body exceeds {self.max_mb} MB."}, status_code=413
+                )
+                await response(scope, receive, send)
+                return
+
+        body_size = 0
+
+        async def limited_receive():
+            nonlocal body_size
+            message = await receive()
+            if message["type"] == "http.request":
+                body_size += len(message.get("body", b""))
+                if body_size > self.max_bytes:
+                    raise RequestBodyTooLarge
+            return message
+
+        try:
+            await self.app(scope, limited_receive, send)
+        except RequestBodyTooLarge:
+            response = JSONResponse(
+                {"detail": f"Request body exceeds {self.max_mb} MB."}, status_code=413
+            )
+            await response(scope, receive, send)
+
+
+app.add_middleware(
+    RequestBodySizeLimitMiddleware,
+    max_bytes=settings.max_upload_mb * 1024 * 1024,
+    max_mb=settings.max_upload_mb,
+)
+
 def _parse_k_values(raw: str) -> list[int]:
     """Accept a JSON array or Swagger's comma-separated form value."""
     value = raw.strip()

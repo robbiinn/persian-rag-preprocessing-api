@@ -31,6 +31,55 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ok")
 
+
+    async def test_rejects_json_body_over_configured_limit(self):
+        import app.main as main_module
+
+        with patch.object(main_module.settings, "max_upload_mb", 1):
+            # The middleware is initialized from the application settings at import time;
+            # send a small body with a declared length above the configured test limit.
+            oversized = b'{}'
+            response = await self.client.post(
+                "/v1/evaluate/retrieval",
+                content=oversized,
+                headers={"Content-Type": "application/json", "Content-Length": str(1024 * 1024 + 1)},
+            )
+        self.assertEqual(response.status_code, 413)
+        self.assertIn("exceeds", response.json()["detail"].lower())
+
+    async def test_rejects_chunked_json_body_over_configured_limit(self):
+        from starlette.testclient import TestClient
+        from app.main import RequestBodySizeLimitMiddleware
+        from starlette.responses import JSONResponse
+
+        async def echo_app(scope, receive, send):
+            body = b""
+            while True:
+                message = await receive()
+                body += message.get("body", b"")
+                if not message.get("more_body", False):
+                    break
+            await JSONResponse({"received": len(body)})(scope, receive, send)
+
+        limited_app = RequestBodySizeLimitMiddleware(echo_app, max_bytes=4, max_mb=0)
+        messages = [
+            {"type": "http.request", "body": b"12345", "more_body": False},
+        ]
+        async def receive():
+            return messages.pop(0)
+
+        sent = []
+        async def send(message):
+            sent.append(message)
+
+        scope = {
+            "type": "http", "path": "/v1/test", "method": "POST",
+            "headers": [], "query_string": b"", "server": ("test", 80),
+            "client": ("test", 123), "scheme": "http", "http_version": "1.1",
+        }
+        await limited_app(scope, receive, send)
+        self.assertEqual(sent[0]["status"], 413)
+
     async def test_basic_pipeline_and_exact_dedup(self):
         response = await self.client.post("/v1/pipeline", json={"records": SAMPLE})
         self.assertEqual(response.status_code, 200, response.text)
