@@ -52,6 +52,19 @@ curl -X POST http://127.0.0.1:8000/v1/pipeline \
 The four input records contain one exact duplicate: the result contains **three FAQ chunks**.
 Each chunk includes normalized question/answer text, `embedding_text` and source metadata.
 
+### Input record fields and skipped records
+
+By default, each FAQ record must contain the Persian keys `سوال` (question) and
+`پاسخ چت بات` (answer). To use English or custom field names, set
+`options.question_field` and `options.answer_field` for normalize requests, or
+`normalization.question_field` and `normalization.answer_field` for pipeline requests.
+
+File uploads accept a JSON array, JSONL objects, a single record object, or a
+wrapper object with a `records` array. Records missing either required field after
+normalization are reported in `skipped_records` with a zero-based `record_index`,
+reason, and missing field names. Responses include `skipped_count`. If no valid records
+remain, the API returns HTTP 422 with the skipped-record details.
+
 For file upload, use `/v1/pipeline/file` in Swagger with `examples/faq.json`.
 Set `chunking` to `{"method":"question_answer","max_chars":100,"overlap_chars":20}`
 to explore answer chunking.

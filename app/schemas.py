@@ -78,6 +78,8 @@ class ProcessResponse(BaseModel):
     output_records: int
     normalization_method: str | None = None
     chunking_method: str | None = None
+    skipped_count: int = 0
+    skipped_records: list[dict[str, Any]] = Field(default_factory=list)
     data: Any
 
 

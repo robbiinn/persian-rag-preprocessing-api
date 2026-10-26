@@ -88,8 +88,9 @@ def _source_id(record: dict[str, Any], question: str, answer: str) -> str:
     return _stable_id(question, answer)
 
 
-def _prepare(records: list[dict[str, Any]], options: NormalizationOptions, source_file: str | None) -> list[dict[str, Any]]:
+def _prepare(records: list[dict[str, Any]], options: NormalizationOptions, source_file: str | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     prepared: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for index, raw in enumerate(records):
         if not isinstance(raw, dict):
@@ -97,6 +98,16 @@ def _prepare(records: list[dict[str, Any]], options: NormalizationOptions, sourc
         question = clean_and_normalize(raw.get(options.question_field, raw.get("question_normalized")))
         answer = clean_and_normalize(raw.get(options.answer_field, raw.get("answer_normalized")))
         if not question or not answer:
+            missing_fields = []
+            if not question:
+                missing_fields.append(options.question_field)
+            if not answer:
+                missing_fields.append(options.answer_field)
+            skipped.append({
+                "record_index": index,
+                "reason": "missing_required_fields",
+                "missing_fields": missing_fields,
+            })
             continue
         signature = (question, answer)
         if signature in seen:
@@ -119,7 +130,7 @@ def _prepare(records: list[dict[str, Any]], options: NormalizationOptions, sourc
                 "processing_steps": ["persian_normalization", "exact_deduplication"],
             },
         })
-    return prepared
+    return prepared, skipped
 
 
 def _cosine_matrix(vectors: list[list[float]]) -> np.ndarray:
@@ -219,10 +230,10 @@ def _llm_dedup(records: list[dict[str, Any]], options: NormalizationOptions) -> 
     return [record for index, record in enumerate(records) if index not in removed]
 
 
-def normalize_records(records: list[dict[str, Any]], options: NormalizationOptions, source_file: str | None = None) -> list[dict[str, Any]]:
-    prepared = _prepare(deepcopy(records), options, source_file)
+def normalize_records(records: list[dict[str, Any]], options: NormalizationOptions, source_file: str | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    prepared, skipped = _prepare(deepcopy(records), options, source_file)
     if options.method.value == "embedding_dedup":
-        return _embedding_dedup(prepared, options)
-    if options.method.value == "llm_dedup":
-        return _llm_dedup(prepared, options)
-    return prepared
+        prepared = _embedding_dedup(prepared, options)
+    elif options.method.value == "llm_dedup":
+        prepared = _llm_dedup(prepared, options)
+    return prepared, skipped

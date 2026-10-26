@@ -49,6 +49,57 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["output_records"], 1)
 
+    async def test_wrapped_records_file_upload(self):
+        payload = b'{"records":[{"سوال":"سوال اول","پاسخ چت بات":"پاسخ اول"}]}'
+        response = await self.client.post(
+            "/v1/pipeline/file",
+            files={"file": ("pipeline.json", io.BytesIO(payload), "application/json")},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["input_records"], 1)
+        self.assertEqual(body["output_records"], 1)
+        self.assertEqual(body["skipped_count"], 0)
+
+    async def test_skipped_records_are_reported(self):
+        response = await self.client.post(
+            "/v1/normalize",
+            json={"records": [
+                {"سوال": "سوال معتبر", "پاسخ چت بات": "پاسخ معتبر"},
+                {"سوال": "سوال بدون پاسخ", "پاسخ چت بات": ""},
+            ]},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["skipped_count"], 1)
+        self.assertEqual(body["skipped_records"], [{
+            "record_index": 1,
+            "reason": "missing_required_fields",
+            "missing_fields": ["پاسخ چت بات"],
+        }])
+
+    async def test_all_invalid_records_return_422(self):
+        response = await self.client.post(
+            "/v1/pipeline",
+            json={"records": [{"سوال": "", "پاسخ چت بات": "پاسخ"}]},
+        )
+        self.assertEqual(response.status_code, 422, response.text)
+        detail = response.json()["detail"]
+        self.assertEqual(detail["skipped_count"], 1)
+        self.assertEqual(detail["skipped_records"][0]["record_index"], 0)
+
+    async def test_custom_question_and_answer_field_names(self):
+        response = await self.client.post(
+            "/v1/normalize",
+            json={
+                "records": [{"question": "سوال", "answer": "پاسخ"}],
+                "options": {"question_field": "question", "answer_field": "answer"},
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["output_records"], 1)
+        self.assertEqual(response.json()["skipped_count"], 0)
+
     async def test_bad_extension(self):
         response = await self.client.post("/v1/normalize/file", files={"file": ("faq.txt", b"[]", "text/plain")})
         self.assertEqual(response.status_code, 415)

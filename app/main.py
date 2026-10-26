@@ -58,15 +58,25 @@ async def authorize(x_api_key: Annotated[str | None, Header()] = None) -> None:
         raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key header.")
 
 
-def _response(input_count: int, data, normalization: str | None = None, chunking: str | None = None, download: bool = False, filename: str = "result.json"):
-    payload = ProcessResponse(input_records=input_count, output_records=output_count(data) if chunking else len(data), normalization_method=normalization, chunking_method=chunking, data=data).model_dump(mode="json")
+def _response(input_count: int, data, normalization: str | None = None, chunking: str | None = None, download: bool = False, filename: str = "result.json", skipped_records=None):
+    payload = ProcessResponse(input_records=input_count, output_records=output_count(data) if chunking else len(data), normalization_method=normalization, chunking_method=chunking, skipped_records=skipped_records or [], skipped_count=len(skipped_records or []), data=data).model_dump(mode="json")
     headers = {"Content-Disposition": f'attachment; filename="{filename}"'} if download else None
     return JSONResponse(payload, headers=headers)
 
 
 def _run_normalize(records, options, source_file=None):
     try:
-        return normalize_records(records, options, source_file)
+        data, skipped = normalize_records(records, options, source_file)
+        if not data:
+            raise HTTPException(status_code=422, detail={
+                "message": "No valid records remain after normalization.",
+                "input_records": len(records),
+                "skipped_count": len(skipped),
+                "skipped_records": skipped,
+            })
+        return data, skipped
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -100,8 +110,8 @@ async def capabilities():
 @app.post("/v1/normalize", dependencies=[Depends(authorize)], tags=["json"])
 async def normalize_json(request: NormalizeRequest, download: bool = Query(False)):
     validate_record_count(request.records)
-    data = _run_normalize(request.records, request.options, request.source_file)
-    return _response(len(request.records), data, request.options.method.value, download=download, filename="normalized.json")
+    data, skipped = _run_normalize(request.records, request.options, request.source_file)
+    return _response(len(request.records), data, request.options.method.value, download=download, filename="normalized.json", skipped_records=skipped)
 
 
 @app.post("/v1/chunk", dependencies=[Depends(authorize)], tags=["json"])
@@ -114,9 +124,9 @@ async def chunk_json(request: ChunkRequest, download: bool = Query(False)):
 @app.post("/v1/pipeline", dependencies=[Depends(authorize)], tags=["json"])
 async def pipeline_json(request: PipelineRequest, download: bool = Query(False)):
     validate_record_count(request.records)
-    normalized = _run_normalize(request.records, request.normalization, request.source_file)
+    normalized, skipped = _run_normalize(request.records, request.normalization, request.source_file)
     data = _run_chunk(normalized, request.chunking)
-    return _response(len(request.records), data, request.normalization.method.value, request.chunking.method.value, download, "pipeline-result.json")
+    return _response(len(request.records), data, request.normalization.method.value, request.chunking.method.value, download, "pipeline-result.json", skipped_records=skipped)
 
 
 @app.post(
@@ -152,8 +162,8 @@ def _options(model, raw: str):
 async def normalize_file(file: Annotated[UploadFile, File(...)], options: Annotated[str, Form()] = "{}", download: Annotated[bool, Form()] = False):
     records = await parse_upload(file)
     parsed = _options(NormalizationOptions, options)
-    data = _run_normalize(records, parsed, file.filename)
-    return _response(len(records), data, parsed.method.value, download=download, filename="normalized.json")
+    data, skipped = _run_normalize(records, parsed, file.filename)
+    return _response(len(records), data, parsed.method.value, download=download, filename="normalized.json", skipped_records=skipped)
 
 
 @app.post("/v1/chunk/file", dependencies=[Depends(authorize)], tags=["file upload"])
@@ -169,9 +179,9 @@ async def pipeline_file(file: Annotated[UploadFile, File(...)], normalization: A
     records = await parse_upload(file)
     norm_options = _options(NormalizationOptions, normalization)
     chunk_options = _options(ChunkingOptions, chunking)
-    normalized = _run_normalize(records, norm_options, file.filename)
+    normalized, skipped = _run_normalize(records, norm_options, file.filename)
     data = _run_chunk(normalized, chunk_options)
-    return _response(len(records), data, norm_options.method.value, chunk_options.method.value, download, "pipeline-result.json")
+    return _response(len(records), data, norm_options.method.value, chunk_options.method.value, download, "pipeline-result.json", skipped_records=skipped)
 
 
 @app.post(

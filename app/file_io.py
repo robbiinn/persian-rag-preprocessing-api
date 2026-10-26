@@ -25,9 +25,12 @@ async def parse_upload(file: UploadFile) -> list[dict[str, Any]]:
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid JSON at line {exc.lineno}, column {exc.colno}.") from exc
     if isinstance(data, dict):
-        data = [data]
+        if "records" in data:
+            data = data["records"]
+        else:
+            data = [data]
     if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
-        raise HTTPException(status_code=400, detail="Input must be a JSON array of objects (or JSONL objects).")
+        raise HTTPException(status_code=400, detail="Input must be a JSON array of objects, an object containing a 'records' array, a single record object, or JSONL objects.")
     validate_record_count(data)
     return data
 
