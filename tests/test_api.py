@@ -62,6 +62,30 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     def test_persian_normalization(self):
         self.assertEqual(clean_and_normalize("  يک&nbsp;متن؟؟  "), "یک متن?")
 
+    def test_persian_normalization_preserves_urls_emails_phones_and_versions(self):
+        cases = {
+            "لینک https://example.com/a?b=1&c=2 را ببینید": "https://example.com/a?b=1&c=2",
+            "ایمیل support@example.com است": "support@example.com",
+            "نسخه 3.5.1 منتشر شد": "3.5.1",
+            "با شماره 021-123456 تماس بگیرید": "021-123456",
+        }
+        for source, protected_token in cases.items():
+            with self.subTest(token=protected_token):
+                self.assertIn(protected_token, clean_and_normalize(source))
+
+    def test_persian_normalization_preserves_multiple_protected_tokens(self):
+        normalized = clean_and_normalize(
+            "راهنما: https://example.com و support@example.com یا 021-123456، نسخه 3.5.1"
+        )
+        for token in (
+            "https://example.com",
+            "support@example.com",
+            "021-123456",
+            "3.5.1",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, normalized)
+
     def test_overlap_must_be_smaller_than_chunk(self):
         with self.assertRaises(ValidationError):
             ChunkingOptions(max_chars=50)

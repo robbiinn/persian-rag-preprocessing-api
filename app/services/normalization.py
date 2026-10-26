@@ -31,6 +31,42 @@ CONTRAST_PAIRS = [
 ]
 _normalizer = Normalizer()
 
+# Protect machine-readable tokens while Hazm rewrites punctuation and spacing.
+PROTECTED_TOKEN_RE = re.compile(
+    r"""(?ix)
+    (?:
+        https?://[^\s<>"'«»]+                         # URLs
+        | www\.[^\s<>"'«»]+                           # www URLs
+        | [\w.+-]+@[\w.-]+\.[a-z]{2,}                 # email addresses
+        | (?<![\w.])\d+(?:[.-]\d+){2,}(?![\w.])      # version-like numbers
+        | (?<![\w])(?:\+?\d[\d()\s.-]{5,}\d)(?![\w]) # phone-like numbers
+    )
+    """
+)
+
+
+def _protect_tokens(text: str) -> tuple[str, dict[str, str]]:
+    """Replace URLs, emails, phone numbers and version strings with safe markers."""
+    protected: dict[str, str] = {}
+
+    def replace(match: re.Match[str]) -> str:
+        marker = f"ZXQPROTECTEDTOKEN{len(protected)}QXZ"
+        protected[marker] = match.group(0)
+        return marker
+
+    return PROTECTED_TOKEN_RE.sub(replace, text), protected
+
+
+def _restore_tokens(text: str, protected: dict[str, str]) -> str:
+    """Restore protected values after normalization, tolerating marker spacing."""
+    for marker, original in protected.items():
+        flexible_marker = r"\s*".join(re.escape(char) for char in marker)
+        text = re.sub(flexible_marker, lambda _: original, text, flags=re.IGNORECASE)
+        # Fallback to the literal placeholder in case the normalizer changed
+        # its internal spacing in an unexpected way.
+        text = text.replace(marker, original)
+    return text
+
 
 def is_missing(value: Any) -> bool:
     if value is None or (isinstance(value, str) and not value.strip()):
@@ -66,7 +102,9 @@ def clean_and_normalize(value: Any) -> str:
     for char in ("\u200e", "\u200f", "\ufeff", "\u2066", "\u2067", "\u2068", "\u2069"):
         text = text.replace(char, "")
     text = text.replace("\u00a0", " ").translate(PERSIAN_CHAR_MAP).translate(DIGIT_MAP)
+    text, protected_tokens = _protect_tokens(text)
     text = _normalizer.normalize(text)
+    text = _restore_tokens(text, protected_tokens)
     for old, new in {"؟": "?", "…": "...", "“": '"', "”": '"', "„": '"', "«": '"', "»": '"', "’": "'", "‘": "'", "–": "-", "—": "-"}.items():
         text = text.replace(old, new)
     text = re.sub(r"\.{4,}", "...", text)
