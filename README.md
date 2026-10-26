@@ -100,8 +100,7 @@ docker compose up --build -d
 ```
 
 The default binding is `127.0.0.1:8000`. The container runs as a non-root user with one
-worker to avoid loading multiple copies of the embedding model. Heavy requests are
-synchronous; this is a portfolio service, not a demonstrated high-throughput deployment.
+worker to avoid loading multiple copies of the embedding model. CPU-bound and synchronous model/API work is dispatched through FastAPI's worker thread pool so it does not directly block the event loop; the health endpoint remains lightweight. The default container still runs one worker, and this is a portfolio service, not a demonstrated high-throughput deployment.
 
 ## Tests
 

@@ -31,6 +31,32 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ok")
 
+
+    async def test_health_is_responsive_during_normalization(self):
+        import asyncio
+        import threading
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocking_normalize(records, options, source_file=None):
+            started.set()
+            release.wait(timeout=2)
+            return []
+
+        with patch("app.main._run_normalize", side_effect=blocking_normalize):
+            request_task = asyncio.create_task(
+                self.client.post("/v1/normalize", json={"records": SAMPLE})
+            )
+            try:
+                self.assertTrue(await asyncio.to_thread(started.wait, 1))
+                health = await asyncio.wait_for(self.client.get("/health"), timeout=0.5)
+                self.assertEqual(health.status_code, 200)
+            finally:
+                release.set()
+            response = await request_task
+            self.assertEqual(response.status_code, 200, response.text)
+
     async def test_basic_pipeline_and_exact_dedup(self):
         response = await self.client.post("/v1/pipeline", json={"records": SAMPLE})
         self.assertEqual(response.status_code, 200, response.text)

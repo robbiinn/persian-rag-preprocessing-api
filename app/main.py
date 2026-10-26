@@ -4,6 +4,7 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import ValidationError
 
 from app.config import settings
@@ -93,26 +94,26 @@ async def health():
 
 
 @app.get("/v1/capabilities", dependencies=[Depends(authorize)], tags=["system"])
-async def capabilities():
+def capabilities():
     return {"normalization": [item.value for item in NormalizationMethod], "chunking": [item.value for item in ChunkingMethod], "embedding_providers": [item.value for item in EmbeddingProvider], "evaluation": ["recall_at_k", "mrr_at_k", "hit_rate_at_k"], "limits": {"max_upload_mb": settings.max_upload_mb, "max_records": settings.max_records}}
 
 
 @app.post("/v1/normalize", dependencies=[Depends(authorize)], tags=["json"])
-async def normalize_json(request: NormalizeRequest, download: bool = Query(False)):
+def normalize_json(request: NormalizeRequest, download: bool = Query(False)):
     validate_record_count(request.records)
     data = _run_normalize(request.records, request.options, request.source_file)
     return _response(len(request.records), data, request.options.method.value, download=download, filename="normalized.json")
 
 
 @app.post("/v1/chunk", dependencies=[Depends(authorize)], tags=["json"])
-async def chunk_json(request: ChunkRequest, download: bool = Query(False)):
+def chunk_json(request: ChunkRequest, download: bool = Query(False)):
     validate_record_count(request.records)
     data = _run_chunk(request.records, request.options)
     return _response(len(request.records), data, chunking=request.options.method.value, download=download, filename="chunks.json")
 
 
 @app.post("/v1/pipeline", dependencies=[Depends(authorize)], tags=["json"])
-async def pipeline_json(request: PipelineRequest, download: bool = Query(False)):
+def pipeline_json(request: PipelineRequest, download: bool = Query(False)):
     validate_record_count(request.records)
     normalized = _run_normalize(request.records, request.normalization, request.source_file)
     data = _run_chunk(normalized, request.chunking)
@@ -126,7 +127,7 @@ async def pipeline_json(request: PipelineRequest, download: bool = Query(False))
     tags=["evaluation"],
     summary="Calculate Recall@K and MRR@K for ranked retrieval results",
 )
-async def evaluate_retrieval_endpoint(request: RetrievalEvaluationRequest):
+def evaluate_retrieval_endpoint(request: RetrievalEvaluationRequest):
     return evaluate_retrieval(request)
 
 
@@ -137,7 +138,7 @@ async def evaluate_retrieval_endpoint(request: RetrievalEvaluationRequest):
     tags=["evaluation"],
     summary="Calculate aggregate retrieval metrics for multiple queries",
 )
-async def evaluate_retrieval_batch_endpoint(request: RetrievalBatchEvaluationRequest):
+def evaluate_retrieval_batch_endpoint(request: RetrievalBatchEvaluationRequest):
     return evaluate_retrieval_batch(request)
 
 
@@ -152,7 +153,7 @@ def _options(model, raw: str):
 async def normalize_file(file: Annotated[UploadFile, File(...)], options: Annotated[str, Form()] = "{}", download: Annotated[bool, Form()] = False):
     records = await parse_upload(file)
     parsed = _options(NormalizationOptions, options)
-    data = _run_normalize(records, parsed, file.filename)
+    data = await run_in_threadpool(_run_normalize, records, parsed, file.filename)
     return _response(len(records), data, parsed.method.value, download=download, filename="normalized.json")
 
 
@@ -160,7 +161,7 @@ async def normalize_file(file: Annotated[UploadFile, File(...)], options: Annota
 async def chunk_file(file: Annotated[UploadFile, File(...)], options: Annotated[str, Form()] = "{}", download: Annotated[bool, Form()] = False):
     records = await parse_upload(file)
     parsed = _options(ChunkingOptions, options)
-    data = _run_chunk(records, parsed)
+    data = await run_in_threadpool(_run_chunk, records, parsed)
     return _response(len(records), data, chunking=parsed.method.value, download=download, filename="chunks.json")
 
 
@@ -169,8 +170,8 @@ async def pipeline_file(file: Annotated[UploadFile, File(...)], normalization: A
     records = await parse_upload(file)
     norm_options = _options(NormalizationOptions, normalization)
     chunk_options = _options(ChunkingOptions, chunking)
-    normalized = _run_normalize(records, norm_options, file.filename)
-    data = _run_chunk(normalized, chunk_options)
+    normalized = await run_in_threadpool(_run_normalize, records, norm_options, file.filename)
+    data = await run_in_threadpool(_run_chunk, normalized, chunk_options)
     return _response(len(records), data, norm_options.method.value, chunk_options.method.value, download, "pipeline-result.json")
 
 
@@ -193,7 +194,7 @@ async def evaluate_retrieval_file(
     except (ValidationError, TypeError, ValueError) as exc:
         detail = json.loads(exc.json()) if isinstance(exc, ValidationError) else str(exc)
         raise HTTPException(status_code=422, detail=detail) from exc
-    payload = evaluate_retrieval_batch(request)
+    payload = await run_in_threadpool(evaluate_retrieval_batch, request)
     headers = {"Content-Disposition": 'attachment; filename="retrieval-evaluation.json"'} if download else None
     return JSONResponse(payload, headers=headers)
 
@@ -213,7 +214,7 @@ async def evaluate_rag_output_file(
     records = await parse_upload(file)
     try:
         parsed_k_values = _parse_k_values(k_values)
-        payload = evaluate_rag_output_records(records, parsed_k_values)
+        payload = await run_in_threadpool(evaluate_rag_output_records, records, parsed_k_values)
     except (ValidationError, TypeError, ValueError) as exc:
         detail = json.loads(exc.json()) if isinstance(exc, ValidationError) else str(exc)
         raise HTTPException(status_code=422, detail=detail) from exc
